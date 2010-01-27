@@ -30,6 +30,8 @@
 (defvar *test-database-type* nil)
 (defvar *test-database-underlying-type* nil)
 (defvar *test-database-user* nil)
+(defvar *test-false-database-user* "adsfjalsdkfjlakjsdfl"
+  "For testing ownership, a user that isn't the owner.")
 (defvar *test-start-utime* nil)
 (defvar *test-connection-spec* nil)
 (defvar *test-connection-db-type* nil)
@@ -44,7 +46,7 @@
   (setf *test-database-type* db-type)
   (setf *test-database-user*
     (cond
-     ((eq :oracle db-type) (second spec))
+     ((member db-type '(:oracle :odbc :aodbc)) (second spec))
      ((>= (length spec) 3) (third spec))))
 
   ;; Connect to the database
@@ -107,14 +109,15 @@
     (when (db-type-spec db-type specs)
       (clsql-sys:initialize-database-type :database-type db-type))))
 
-(defun write-report-banner (report-type db-type stream)
+(defun write-report-banner (report-type db-type stream db-name)
   (format stream
           "~&
 ******************************************************************************
 ***     CLSQL ~A begun at ~A
 ***     ~A
 ***     ~A on ~A
-***     Database ~:@(~A~) backend~A.
+***     Database ~:@(~A~)
+***     Type: ~:@(~A~) backend~A.
 ******************************************************************************
 "
           report-type
@@ -124,6 +127,7 @@
           (lisp-implementation-type)
           (lisp-implementation-version)
           (machine-type)
+	  db-name
           db-type
           (if (not (eq db-type *test-database-underlying-type*))
               (format nil " with underlying type ~:@(~A~)"
@@ -138,7 +142,8 @@
        (multiple-value-bind (test-forms skip-tests)
            (compute-tests-for-backend db-type *test-database-underlying-type*)
 
-           (write-report-banner "Test Suite" db-type *report-stream*)
+           (write-report-banner "Test Suite" db-type *report-stream*
+				(database-name-from-spec spec db-type))
 
 ;           (test-initialise-database)
 
@@ -224,11 +229,19 @@
            (push (cons test "syntax not supported") skip-tests))
           ((and (eq *test-database-type* :odbc)
                 (eq *test-database-underlying-type* :postgresql)
-                (clsql-sys:in test :fddl/owner/1))
+                (clsql-sys:in test :fddl/owner/1 :fddl/owner/table
+			      :fddl/owner/attributes
+			      :fddl/owner/attribute-types
+			      :fddl/owner/index
+			      :fddl/owner/sequence))
            (push (cons test "table ownership not supported by postgresql odbc driver") skip-tests))
           ((and (not (member *test-database-underlying-type*
                              '(:postgresql :oracle)))
-                (clsql-sys:in test :fddl/owner/1))
+                (clsql-sys:in test :fddl/owner/1 :fddl/owner/table
+			      :fddl/owner/attributes
+			      :fddl/owner/attribute-types
+			      :fddl/owner/index
+			      :fddl/owner/sequence))
            (push (cons test "table ownership not supported") skip-tests))
           ((and (null (clsql-sys:db-type-has-intersect? db-underlying-type))
                 (clsql-sys:in test :fdml/query/7))

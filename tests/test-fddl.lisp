@@ -20,12 +20,24 @@
 #.(clsql:locally-enable-sql-reader-syntax)
 
 (def-dataset *ds-fddl*
-  (:setup ("CREATE TABLE ALPHA (A integer, B integer, C varchar (30), d date, f float)"
-	   "CREATE TABLE BRAVO (jack integer, jill integer)"))
-  (:sqldata "ALPHA" "A,B,C,d,f"
-	    "1,1,'asdf','2010-01-01',3.14"
-	    "2,1,'blarg','2012-12-21',0.1")
+  (:setup (lambda ()
+	    (create-table [alpha] '(([a] integer)
+				    ([c] (varchar 30))
+				    ([d] date)
+				    ([f] float)))
+	    (create-table [bravo] '(([foo] integer)
+				    ([bar] integer)))))
+  (:sqldata "ALPHA" "A,C,D,F"
+	    "1,'asdf','2010-01-01',3.14"
+	    "2,'blarg','2012-12-21',0.1"
+	    "3,'matey','1992-02-29',0.0")
   (:cleanup "DROP TABLE ALPHA" "DROP TABLE BRAVO"))
+
+(def-dataset *ds-fddl-parsing-oddities*
+  (:setup "CREATE TABLE ATEST (
+A varchar (32),
+B varchar(32))")
+  (:cleanup "DROP TABLE ATEST"))
 
 (setq *rt-fddl*
       '(
@@ -34,7 +46,7 @@
 (deftest :fddl/table/1
     (with-dataset *ds-fddl*
       (sort (mapcar #'string-downcase
-		    (clsql:list-tables :owner *test-database-user*))
+		    (clsql:list-tables ))
 	    #'string<))
   ("alpha" "bravo"))
 
@@ -46,10 +58,10 @@
 				 ([name] (string 24))
 				 ([comments] longchar)))
 	   (values
-	    (clsql:table-exists-p [foo] :owner *test-database-user*)
+	    (clsql:table-exists-p [foo])
 	    (progn
 	      (clsql:drop-table [foo] :if-does-not-exist :ignore)
-	      (clsql:table-exists-p [foo] :owner *test-database-user*))))
+	      (clsql:table-exists-p [foo]))))
   t nil)
 
 ;; create a table, list its attributes and drop it
@@ -134,19 +146,18 @@
      (with-dataset *ds-fddl*
        (sort
 	(mapcar #'string-downcase
-		(clsql:list-attributes [alpha] :owner *test-database-user*))
+		(clsql:list-attributes [alpha] ))
 	#'string<)))
-  "a" "b" "c" "d" "f")
+  "a" "c" "d" "f")
 
 (deftest :fddl/attributes/2
     (with-dataset *ds-fddl*
       (apply #'values
 	     (sort
 	      (mapcar #'(lambda (a) (string-downcase (car a)))
-		      (clsql:list-attribute-types [alpha]
-						  :owner *test-database-user*))
+		      (clsql:list-attribute-types [alpha]))
 	      #'string<)))
-  "a" "b" "c" "d" "f")
+  "a" "c" "d" "f")
 
 ;; Attribute types are vendor specific so need to test a range
 (deftest :fddl/attributes/3
@@ -176,26 +187,34 @@
       (and (member (clsql:attribute-type [t_bigint] [TYPE_BIGINT]) '(:bigint :int8)) t))
   t)
 
+(deftest :fddl/attributes/8
+    ;;this is mostly from sqlite3 sending back
+    (with-dataset *ds-fddl-parsing-oddities*
+      (values
+	(clsql-sys:in (clsql:attribute-type [a] [atest]) :varchar :varchar2)
+	(clsql-sys:in (clsql:attribute-type [b] [atest]) :varchar :varchar2)))
+  t t)
+
 
 ;; create a view, test for existence, drop it and test again
 (deftest :fddl/view/1
     (with-dataset *ds-fddl*
-    (progn (clsql:create-view [v1]
-			      :as [select [a] [b] [c]
-					  :from [alpha]
-					  :where [= [a] 1]])
-	   (values
-	    (clsql:view-exists-p [v1] :owner *test-database-user*)
-	    (progn
-	      (clsql:drop-view [v1] :if-does-not-exist :ignore)
-	      (clsql:view-exists-p [v1] :owner *test-database-user*)))))
+      (progn (clsql:create-view [v1]
+				:as [select [a] [c] [d]
+					    :from [alpha]
+					    :where [= [a] 1]])
+	     (values
+	       (clsql:view-exists-p [v1])
+	       (progn
+		 (clsql:drop-view [v1] :if-does-not-exist :ignore)
+		 (clsql:view-exists-p [v1])))))
   t nil)
 
   ;; create a view, list its attributes and drop it
 (deftest :fddl/view/2
       (with-dataset *ds-fddl*
 	(progn (clsql:create-view [v1]
-			      :as [select [a] [b] [c]
+			      :as [select [a] [c] [d]
 					  :from [alpha]
 					  :where [= [a] 1]])
 	     (unwind-protect
@@ -203,67 +222,70 @@
 				(clsql:list-attributes [v1]))
 			#'string<)
 	       (clsql:drop-view [v1] :if-does-not-exist :ignore))))
-    ("a" "b" "c"))
+    ("a" "c" "d"))
 
   ;; create a view, select stuff from it and drop it
 (deftest :fddl/view/3
     (with-dataset *ds-fddl*
       (progn
 	(clsql:create-view [v1]
-			   :as [select [a] [b] [c]
+			   :as [select [a] [c] [d]
 				       :from [alpha]
 				       :where [= [a] 1]])
 	(unwind-protect
 	     (let ((result
 		    (list
 		     ;; Shouldn't exist
-		     (clsql:select [a] [b] [c]
+		     (clsql:select [a] [c] 
 				   :from [v1]
 				   :where [= [a] -1])
 		     ;; Should exist
-		     (car (clsql:select [a] [b] [c]
+		     (car (clsql:select [a] [c]
 					:from [v1]
 					:where [= [a] 1])))))
 
 	       (apply #'values result))
 	  (clsql:drop-view [v1] :if-does-not-exist :ignore))))
-  nil (1 1 "asdf"))
+  nil (1 "asdf"))
 
 (deftest :fddl/view/4
     (with-dataset *ds-fddl*
       (progn
 	(clsql:create-view [v1]
 			   :column-list '([x] [y] [z])
-			   :as [select [a] [b] [c]
+			   :as [select [a] [c] [d]
 				       :from [alpha]
 				       :where [= [a] 1]])
 	(unwind-protect
 	     (let ((result
 		    (list
+		     (sort (mapcar #'string-downcase
+				   (clsql:list-attributes [v1]))
+			   #'string<)
 		     ;; Shouldn't exist
-		     (clsql:select [x] [y] [z]
+		     (clsql:select [x] [y] 
 				   :from [v1]
 				   :where [= [x] -1])
 		     ;; Should exist
-		     (car (clsql:select [x] [y] [z]
+		     (car (clsql:select [x] [y] 
 					:from [v1]
 					:where [= [x] 1])))))
 
 	       (apply #'values result))
 	  (clsql:drop-view [v1] :if-does-not-exist :ignore))))
-  nil (1 1 "asdf"))
+  ("x" "y" "z") nil (1 "asdf"))
 
 ;; create an index, test for existence, drop it and test again
 (deftest :fddl/index/1
     (with-dataset *ds-fddl*
       (progn (clsql:create-index [bar] :on [alpha] :attributes
-				 '([a] [b] [c]) :unique t)
+				 '([a] [c]) :unique t)
 	     (values
-	       (clsql:index-exists-p [bar] :owner *test-database-user*)
+	       (clsql:index-exists-p [bar] )
 	       (progn
 		 (clsql:drop-index [bar] :on [alpha]
 				   :if-does-not-exist :ignore)
-		 (clsql:index-exists-p [bar] :owner *test-database-user*)))))
+		 (clsql:index-exists-p [bar])))))
   t nil)
 
 ;; create indexes with names as strings, symbols and in square brackets
@@ -273,7 +295,7 @@
 	    (result '()))
 	(dolist (name names)
 	  (clsql:create-index name :on [alpha] :attributes '([a]))
-	  (push (clsql:index-exists-p name :owner *test-database-user*) result)
+	  (push (clsql:index-exists-p name ) result)
 	  (clsql:drop-index name :on [alpha] :if-does-not-exist :ignore))
 	(apply #'values result)))
   t t t)
@@ -294,7 +316,7 @@
        (sort
 	(mapcar
 	 #'string-downcase
-	 (clsql:list-indexes :on [i3test] :owner *test-database-user*))
+	 (clsql:list-indexes :on [i3test]))
 	#'string-lessp)
        (progn
 	 (clsql:drop-index [bar] :on [i3test])
@@ -307,10 +329,10 @@
 (deftest :fddl/sequence/1
     (progn (clsql:create-sequence [foo])
 	   (values
-	    (clsql:sequence-exists-p [foo] :owner *test-database-user*)
+	    (clsql:sequence-exists-p [foo])
 	    (progn
 	      (clsql:drop-sequence [foo] :if-does-not-exist :ignore)
-	      (clsql:sequence-exists-p [foo] :owner *test-database-user*))))
+	      (clsql:sequence-exists-p [foo]))))
   t nil)
 
 ;; create and increment a sequence
@@ -347,6 +369,65 @@
        (> (length (clsql:list-tables :owner :all))
 	  (length (clsql:list-tables :owner nil)))))
   t)
+
+(deftest :fddl/owner/table
+    (with-dataset *ds-fddl*
+      (values
+	(clsql-sys:table-exists-p [alpha])
+	(clsql-sys:table-exists-p [alpha] :owner *test-database-user*)
+	(clsql-sys:table-exists-p [alpha] :owner *test-false-database-user*)))
+  t t nil)
+
+(deftest :fddl/owner/attributes
+    (with-dataset *ds-fddl*
+      (values
+	(length (clsql-sys:list-attributes [alpha]))
+	(length (clsql-sys:list-attributes [alpha] :owner *test-database-user*))
+	(length (clsql-sys:list-attributes [alpha] :owner *test-false-database-user*))))
+  4 4 0)
+
+(deftest :fddl/owner/attribute-types
+    (with-dataset *ds-fddl*
+      (values
+	(length (clsql:list-attribute-types [alpha]))
+	(length (clsql:list-attribute-types [alpha] :owner *test-database-user*))
+	(length (clsql:list-attribute-types [alpha] :owner *test-false-database-user*))))
+  4 4 0)
+
+(deftest :fddl/owner/index
+    (with-dataset *ds-fddl*
+      (progn (clsql:create-index [bar] :on [alpha]
+				 :attributes '([a] [c]))
+	     (values
+	       (clsql:index-exists-p [bar] )
+	       (clsql:index-exists-p [bar] :owner *test-database-user*)
+	       (clsql:index-exists-p [bar] :owner *test-false-database-user*)
+	       
+	       (length (clsql-sys:list-indexes :on [alpha]))
+	       (length (clsql-sys:list-indexes :on [alpha] :owner *test-database-user*))
+	       (length (clsql-sys:list-indexes :on [alpha] :owner *test-false-database-user*))
+	       (progn
+		 (clsql:drop-index [bar] :on [alpha]
+				   :if-does-not-exist :ignore)
+		 (clsql:index-exists-p [bar] :owner *test-database-user*))
+	       (clsql:index-exists-p [bar] ))))
+  t t nil
+  1 1 0
+  nil nil)
+
+(deftest :fddl/owner/sequence
+    (progn (clsql:create-sequence [foo])
+	   (values
+	    (clsql:sequence-exists-p [foo])
+	    (clsql:sequence-exists-p [foo] :owner *test-database-user*)
+	    (clsql:sequence-exists-p [foo] :owner *test-false-database-user*)
+	    
+	    (progn
+	      (clsql:drop-sequence [foo] :if-does-not-exist :ignore)
+	      (clsql:sequence-exists-p [foo] ))))
+  t t nil nil)
+
+
 
 (deftest :fddl/cache-table-queries/1
     (with-dataset *ds-fddl*
